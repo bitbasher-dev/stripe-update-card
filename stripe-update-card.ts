@@ -1,49 +1,87 @@
 import { initTRPC } from "@trpc/server";
+import { fastifyTRPCPlugin } from "@trpc/server/adapters/fastify";
 import { z } from "zod";
+import { CONFIG } from "./config";
+import Stripe from "stripe";
+import fastify from "fastify";
+import { fastifyCors } from "@fastify/cors";
+
+const app = fastify();
+
+const stripe = new Stripe(CONFIG.STRIPE_SECRET_KEY, {
+  apiVersion: "2022-11-15",
+});
 
 const t = initTRPC.create();
-
 const router = t.router;
 const publicProcedure = t.procedure;
 
-interface User {
-  id: string;
-  name: string;
-}
-
-const userList: User[] = [
-  {
-    id: "1",
-    name: "KATT",
-  },
-];
-
 const appRouter = router({
-  userById: publicProcedure
-    .input((val: unknown) => {
-      if (typeof val === "string") return val;
-      throw new Error(`Invalid input: ${typeof val}`);
-    })
-    .query((req) => {
-      const input = req.input;
-      const user = userList.find((it) => it.id === input);
+  getStripeUserInfo: publicProcedure
+    .input(
+      z.object({
+        stripeCustomerId: z
+          .string()
+          .describe("Customer ID from Stripe (sub_...)"),
+      })
+    )
+    .query(async (req) => {
+      const { stripeCustomerId } = req.input;
 
-      return user;
+      const customer = await stripe.customers.retrieve(stripeCustomerId);
+
+      console.log(customer);
+
+      if (customer.deleted) return null;
+
+      return { name: customer.name, address: customer.address };
     }),
-  userCreate: publicProcedure
-    .input(z.object({ name: z.string() }))
-    .mutation((req) => {
-      const id = `${Math.random()}`;
 
-      const user: User = {
-        id,
-        name: req.input.name,
+  updateDefaultPaymentMethod: publicProcedure
+    .input(
+      z.object({
+        stripeCustomerId: z
+          .string()
+          .describe("Customer ID from Stripe (sub_...)"),
+        stripePaymentMethodId: z
+          .string()
+          .describe("PaymentMethod ID from Stripe (pm_...)"),
+      })
+    )
+    .mutation(async ({ input }) => {
+      const { stripeCustomerId, stripePaymentMethodId } = input;
+
+      const paymentMethod = await stripe.paymentMethods.attach(
+        stripePaymentMethodId,
+        { customer: stripeCustomerId }
+      );
+
+      const customer = await stripe.customers.update(stripeCustomerId, {
+        invoice_settings: {
+          default_payment_method: paymentMethod.id,
+        },
+      });
+
+      return {
+        customer: customer.id,
       };
-
-      userList.push(user);
-
-      return user;
     }),
 });
 
 export type AppRouter = typeof appRouter;
+
+app.register(fastifyCors);
+
+app.register(fastifyTRPCPlugin, {
+  prefix: "/trpc",
+  trpcOptions: { router: appRouter },
+});
+
+async function run() {
+  await app.listen({
+    port: 4545,
+  });
+  console.log(`Listening on http://localhost:4545 🛸`);
+}
+
+run();
