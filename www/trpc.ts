@@ -6,7 +6,8 @@ import { inferRouterOutputs } from "@trpc/server";
 export const trpc = createTRPCProxyClient<AppRouter>({
   links: [
     httpBatchLink({
-      url: "http://localhost:4545/trpc",
+      // url: "http://localhost:4545/trpc",
+      url: "https://billing-api.troybroussard.com/trpc",
     }),
   ],
 });
